@@ -1,0 +1,337 @@
+// Prisma schema for ClaimsAI Intelligent Processing
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Enums
+enum UserRole {
+  intake_clerk
+  validation_specialist
+  human_reviewer
+  admin
+}
+
+enum ClaimStatus {
+  new
+  processing
+  validation_pending
+  validation_complete
+  exception
+  human_review
+  ready_for_submission
+  submitted
+  rejected
+}
+
+enum SubmissionChannel {
+  email
+  fax
+  portal
+  edi
+}
+
+enum DocumentType {
+  cms_1500
+  ub_04
+  operative_notes
+  h_and_p
+  prior_auth
+  referral
+  medical_records
+  other
+}
+
+enum OcrStatus {
+  pending
+  processing
+  complete
+  failed
+}
+
+enum ValidationStatus {
+  pass
+  warning
+  fail
+  pending
+}
+
+enum ValidationCategory {
+  eligibility
+  code
+  business_rule
+  document
+}
+
+enum FieldCategory {
+  patient
+  provider
+  claim
+  codes
+}
+
+enum Priority {
+  low
+  medium
+  high
+  urgent
+}
+
+enum PayerStatus {
+  pending
+  accepted
+  in_review
+  paid
+  denied
+  partial_payment
+}
+
+enum QueueJobStatus {
+  pending
+  processing
+  completed
+  failed
+  cancelled
+}
+
+enum QueueJobType {
+  ocr_processing
+  ai_extraction
+  validation
+  eligibility_check
+  submission
+  notification
+}
+
+// Models
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      UserRole @default(intake_clerk)
+  avatar    String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  assignedClaims Claim[]         @relation("ClaimAssignee")
+  auditLogs      AuditLogEntry[]
+
+  @@index([email])
+  @@index([role])
+}
+
+model Claim {
+  id                 String            @id @default(cuid())
+  submissionChannel  SubmissionChannel
+  status             ClaimStatus       @default(new)
+  priority           Priority          @default(medium)
+  confidenceScore    Float             @default(0)
+  patientName        String?
+  memberId           String?
+  totalAmount        Float?
+  ediContent         String?           @db.Text
+  confirmationNumber String?
+  receivedAt         DateTime          @default(now())
+  submittedAt        DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  assigneeId String?
+  assignee   User?   @relation("ClaimAssignee", fields: [assigneeId], references: [id])
+
+  documents       Document[]
+  extractedFields ExtractedField[]
+  validationChecks ValidationCheck[]
+  auditLog        AuditLogEntry[]
+  payerTracking   PayerTracking?
+  queueJobs       QueueJob[]
+
+  @@index([status])
+  @@index([priority])
+  @@index([receivedAt])
+  @@index([assigneeId])
+}
+
+model Document {
+  id                       String       @id @default(cuid())
+  name                     String
+  type                     DocumentType
+  url                      String
+  thumbnailUrl             String?
+  ocrStatus                OcrStatus    @default(pending)
+  classificationConfidence Float        @default(0)
+  qualityScore             Float        @default(0)
+  rawOcrText               String?      @db.Text
+  uploadedAt               DateTime     @default(now())
+  processedAt              DateTime?
+  createdAt                DateTime     @default(now())
+  updatedAt                DateTime     @updatedAt
+
+  claimId String
+  claim   Claim  @relation(fields: [claimId], references: [id], onDelete: Cascade)
+
+  extractedFields ExtractedField[]
+
+  @@index([claimId])
+  @@index([ocrStatus])
+}
+
+model ExtractedField {
+  id         String        @id @default(cuid())
+  category   FieldCategory
+  label      String
+  value      String
+  confidence Float         @default(0)
+  isEdited   Boolean       @default(false)
+  originalValue String?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  claimId String
+  claim   Claim  @relation(fields: [claimId], references: [id], onDelete: Cascade)
+
+  documentId String?
+  document   Document? @relation(fields: [documentId], references: [id])
+
+  @@index([claimId])
+  @@index([category])
+}
+
+model ValidationCheck {
+  id          String             @id @default(cuid())
+  category    ValidationCategory
+  name        String
+  description String
+  status      ValidationStatus   @default(pending)
+  details     String?
+  ruleId      String?
+  executedAt  DateTime?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  claimId String
+  claim   Claim  @relation(fields: [claimId], references: [id], onDelete: Cascade)
+
+  @@index([claimId])
+  @@index([status])
+  @@index([category])
+}
+
+model AuditLogEntry {
+  id        String   @id @default(cuid())
+  action    String
+  details   String?
+  timestamp DateTime @default(now())
+  metadata  Json?
+
+  claimId String
+  claim   Claim  @relation(fields: [claimId], references: [id], onDelete: Cascade)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@index([claimId])
+  @@index([userId])
+  @@index([timestamp])
+}
+
+model PayerTracking {
+  id                  String      @id @default(cuid())
+  status              PayerStatus @default(pending)
+  payerName           String
+  payerId             String
+  expectedPaymentDate DateTime?
+  lastUpdated         DateTime    @default(now())
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+
+  claimId String @unique
+  claim   Claim  @relation(fields: [claimId], references: [id], onDelete: Cascade)
+
+  trackingEvents PayerTrackingEvent[]
+
+  @@index([status])
+}
+
+model PayerTrackingEvent {
+  id          String   @id @default(cuid())
+  status      String
+  description String
+  timestamp   DateTime @default(now())
+
+  payerTrackingId String
+  payerTracking   PayerTracking @relation(fields: [payerTrackingId], references: [id], onDelete: Cascade)
+
+  @@index([payerTrackingId])
+}
+
+model QueueJob {
+  id          String         @id @default(cuid())
+  type        QueueJobType
+  status      QueueJobStatus @default(pending)
+  priority    Int            @default(0)
+  payload     Json?
+  result      Json?
+  error       String?
+  attempts    Int            @default(0)
+  maxAttempts Int            @default(3)
+  scheduledAt DateTime       @default(now())
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  claimId String?
+  claim   Claim?  @relation(fields: [claimId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([type])
+  @@index([scheduledAt])
+  @@index([claimId])
+}
+
+model BusinessRule {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String
+  category    ValidationCategory
+  condition   Json     // Rule condition in JSON format
+  action      Json     // Action to take when rule matches
+  isActive    Boolean  @default(true)
+  priority    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([category])
+  @@index([isActive])
+}
+
+model SystemConfig {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ProcessingMetrics {
+  id                   String   @id @default(cuid())
+  date                 DateTime @db.Date
+  totalClaims          Int      @default(0)
+  processedClaims      Int      @default(0)
+  submittedClaims      Int      @default(0)
+  exceptionClaims      Int      @default(0)
+  avgProcessingTimeMs  Int      @default(0)
+  avgConfidenceScore   Float    @default(0)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@unique([date])
+  @@index([date])
+}
